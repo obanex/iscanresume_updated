@@ -1,4 +1,5 @@
 exports.handler = async (event) => {
+  // Handle CORS preflight
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 200,
@@ -13,6 +14,9 @@ exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+      },
       body: 'Method Not Allowed'
     };
   }
@@ -23,62 +27,58 @@ exports.handler = async (event) => {
   };
 
   try {
-    const { resume } = JSON.parse(event.body);
+    const { resume } = JSON.parse(event.body || '{}');
 
     if (!resume) {
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({
-          error: 'No resume provided'
-        })
+        body: JSON.stringify({ error: 'No resume provided' })
       };
     }
 
-    const prompt = `You are an expert ATS resume analyser. Analyse this resume and return ONLY valid JSON, no markdown, no explanation, no code blocks.
+    const prompt = `You are an expert ATS resume analyser. Return ONLY valid JSON (no markdown, no explanation).
 
-The JSON must follow this exact structure:
+JSON format:
 {
-  "atsScore": <integer 0-100 based on actual resume quality>,
-  "readability": <integer 0-100>,
-  "wordCount": <integer>,
-  "keywordsFound": <integer>,
-  "keywordsMissing": <integer>,
-  "weakBullets": <integer>,
+  "atsScore": 0-100,
+  "readability": 0-100,
+  "wordCount": number,
+  "keywordsFound": number,
+  "keywordsMissing": number,
+  "weakBullets": number,
   "sections": [
-    {"name": "Summary", "score": <0-100>},
-    {"name": "Experience", "score": <0-100>},
-    {"name": "Skills", "score": <0-100>},
-    {"name": "Education", "score": <0-100>},
-    {"name": "Projects", "score": <0-100>}
+    {"name": "Summary", "score": 0-100},
+    {"name": "Experience", "score": 0-100},
+    {"name": "Skills", "score": 0-100},
+    {"name": "Education", "score": 0-100},
+    {"name": "Projects", "score": 0-100}
   ],
   "feedback": [
     {"type": "error", "title": "...", "body": "..."},
     {"type": "warning", "title": "...", "body": "..."},
     {"type": "success", "title": "...", "body": "..."}
   ],
-  "present": ["keyword1", "keyword2"],
-  "missing": ["keyword1", "keyword2"]
+  "present": ["keyword1"],
+  "missing": ["keyword1"]
 }
 
 Rules:
-- atsScore must ACCURATELY reflect resume quality
-- Strong resume = 75-92
-- Average resume = 50-74
-- Weak resume = 20-49
-- Do NOT return the same score every time
-- Return at least 3 feedback items
-- Return at least 5 present keywords
-- Return at least 5 missing keywords
+- Return realistic scores (do NOT repeat same values)
+- At least 3 feedback items
+- At least 5 present and missing keywords
 
-Resume to analyse:
+Resume:
 ${resume.slice(0, 4000)}`;
 
-    console.log('API KEY EXISTS:', !!process.env.GEMINI_API_KEY);
-    console.log('API KEY START:', process.env.GEMINI_API_KEY?.slice(0, 10));
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      throw new Error('Missing GEMINI_API_KEY environment variable');
+    }
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {
@@ -87,7 +87,12 @@ ${resume.slice(0, 4000)}`;
         body: JSON.stringify({
           contents: [
             {
-              parts: [{ text: prompt }]
+              role: "user",   // ✅ FIXED (this was missing before)
+              parts: [
+                {
+                  text: prompt
+                }
+              ]
             }
           ],
           generationConfig: {
@@ -98,46 +103,51 @@ ${resume.slice(0, 4000)}`;
       }
     );
 
-    // CHECK FOR GEMINI API ERRORS
-    if (!response.ok) {
-      const errorText = await response.text();
+    const raw = await response.text();
+    let data;
 
-      console.error('Gemini API error:', errorText);
-
-      throw new Error(`Gemini API failed: ${response.status}`);
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      console.error('Non-JSON response from Gemini:', raw);
+      throw new Error('Invalid response from Gemini API');
     }
 
-    const data = await response.json();
+    if (!response.ok) {
+      console.error('Gemini API error response:', data);
+      throw new Error(data?.error?.message || 'Gemini API request failed');
+    }
 
-    let text =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    // CLEAN RESPONSE
+    if (!text) {
+      console.error('Empty Gemini response:', data);
+      throw new Error('Gemini returned empty response');
+    }
+
+    // Clean response
     text = text
       .replace(/```json/g, '')
       .replace(/```/g, '')
       .trim();
 
-    // EXTRACT JSON SAFELY
+    // Extract JSON safely
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
 
     if (start === -1 || end === -1) {
-      console.error('INVALID GEMINI RESPONSE:', text);
-
-      throw new Error('Gemini returned invalid JSON');
+      console.error('Invalid AI output:', text);
+      throw new Error('AI did not return valid JSON');
     }
 
     const cleanJson = text.slice(start, end + 1);
 
     let result;
-
     try {
       result = JSON.parse(cleanJson);
-    } catch (parseErr) {
-      console.error('JSON PARSE ERROR:', cleanJson);
-
-      throw new Error('Failed to parse AI response');
+    } catch (err) {
+      console.error('JSON parse failed:', cleanJson);
+      throw new Error('Failed to parse AI-generated JSON');
     }
 
     return {
