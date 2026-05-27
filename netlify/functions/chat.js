@@ -1,58 +1,145 @@
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type' }, body: '' };
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      },
+      body: ''
+    };
   }
-  if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
 
-  const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: 'Method Not Allowed'
+    };
+  }
+
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'application/json'
+  };
 
   try {
-    const { messages, resume, analysis } = JSON.parse(event.body);
-    if (!messages) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Messages required' }) };
+    const body = JSON.parse(event.body || '{}');
+    const { messages = [], resume, analysis } = body;
 
-    // Build context
-    let context = `You are iScanResume's AI career coach — an expert recruiter and career advisor with 15 years of experience. Help candidates improve their resumes, prepare for interviews, and navigate their job search. Be specific, actionable, direct, and encouraging. Use bullet points for lists. Keep responses concise (under 200 words unless detail is truly needed).`;
-
-    if (resume) context += `\n\nCandidate's resume:\n${resume.slice(0, 3000)}`;
-    if (analysis) {
-      context += `\n\nLatest ATS score: ${analysis.atsScore}/100.`;
-      const errors = (analysis.feedback || []).filter(f => f.type === 'error').map(f => f.title);
-      if (errors.length) context += ` Key issues: ${errors.join('; ')}.`;
-      if (analysis.missing?.length) context += ` Missing keywords: ${analysis.missing.slice(0, 8).join(', ')}.`;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Messages required' })
+      };
     }
 
-    // Build conversation history for Gemini
-    // Gemini uses "user" and "model" roles
+    const context = `
+You are iScanResume's AI career coach — an expert recruiter and career advisor with 15 years of experience.
+Be specific, actionable, and concise (max 200 words unless needed).
+`;
+
+    let enhancedContext = context;
+
+    if (resume) {
+      enhancedContext += `\n\nResume:\n${resume.slice(0, 3000)}`;
+    }
+
+    if (analysis) {
+      enhancedContext += `\n\nATS Score: ${analysis.atsScore}/100`;
+
+      const errors = (analysis.feedback || [])
+        .filter(f => f.type === 'error')
+        .map(f => f.title);
+
+      if (errors.length) {
+        enhancedContext += `\nKey issues: ${errors.join(', ')}`;
+      }
+
+      if (analysis.missing?.length) {
+        enhancedContext += `\nMissing keywords: ${analysis.missing.slice(0, 8).join(', ')}`;
+      }
+    }
+
     const history = messages.slice(0, -1).map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
+      parts: [{ text: m.content || '' }]
     }));
 
     const lastMessage = messages[messages.length - 1];
 
+    if (!lastMessage?.content) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: 'Last message is empty' })
+      };
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      throw new Error('Missing GEMINI_API_KEY');
+    }
+
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          system_instruction: { parts: [{ text: context }] },
           contents: [
             ...history,
-            { role: 'user', parts: [{ text: lastMessage.content }] },
+            {
+              role: 'user',
+              parts: [{ text: lastMessage.content }]
+            }
           ],
-          generationConfig: { temperature: 0.7, maxOutputTokens: 800 },
-        }),
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 800
+          }
+        })
       }
     );
 
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
+    const raw = await response.text();
+    let data;
 
-    const result = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "I'm having trouble responding right now. Please try again.";
-    return { statusCode: 200, headers, body: JSON.stringify({ result }) };
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      console.error('Non-JSON Gemini response:', raw);
+      throw new Error('Invalid response from Gemini');
+    }
+
+    if (!response.ok) {
+      console.error('Gemini error:', data);
+      throw new Error(data?.error?.message || 'Gemini request failed');
+    }
+
+    const result =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+    if (!result) {
+      console.error('Empty Gemini output:', data);
+      throw new Error('Gemini returned empty response');
+    }
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ result })
+    };
+
   } catch (err) {
     console.error('chat error:', err);
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
+
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: err.message })
+    };
   }
 };
