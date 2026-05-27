@@ -1,65 +1,152 @@
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type' }, body: '' };
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      },
+      body: ''
+    };
   }
-  if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
 
-  const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: 'Method Not Allowed'
+    };
+  }
+
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'application/json'
+  };
 
   try {
-    const { resume, role, types } = JSON.parse(event.body);
-    if (!resume || !role || !types) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Resume, role, and types required' }) };
+    const body = JSON.parse(event.body || '{}');
+    const { resume, role, types = [] } = body;
 
-    const prompt = `You are a senior technical interviewer. Generate personalised interview questions based on the candidate's actual resume and target role.
+    if (!resume || !role || !Array.isArray(types) || types.length === 0) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          error: 'Resume, role, and types (array) required'
+        })
+      };
+    }
 
-Return ONLY valid JSON, no markdown, no code blocks:
+    const prompt = `
+You are a senior technical interviewer.
+
+Return ONLY valid JSON (no markdown, no explanation):
+
 {
-  "total": <number>,
+  "total": number,
   "questions": {
     "Behavioral": [
-      {"question": "Question specific to their experience", "hint": "Brief tip on how to answer"},
-      {"question": "...", "hint": "..."}
+      {"question": "", "hint": ""}
     ],
     "Technical": [
-      {"question": "...", "hint": "..."},
-      {"question": "...", "hint": "..."}
+      {"question": "", "hint": ""}
     ]
   }
 }
 
 Rules:
-- Only include question types from this list: ${types.join(', ')}
-- Make every question specific to the candidate's actual experience in their resume
-- Each requested type should have 2-3 questions
-- Hints should be practical and concise
+- Only include types: ${types.join(', ')}
+- Questions must be based on the resume
+- 2-3 questions per type
+- Hints must be short and practical
 
-Target role: ${role}
+Role: ${role}
 
 Resume:
-${resume.slice(0, 2500)}`;
+${resume.slice(0, 2500)}
+`;
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      throw new Error('Missing GEMINI_API_KEY');
+    }
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.5, maxOutputTokens: 1500 },
-        }),
+          contents: [
+            {
+              role: "user",   // ✅ FIXED
+              parts: [{ text: prompt }]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.5,
+            maxOutputTokens: 1500
+          }
+        })
       }
     );
 
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
+    const raw = await response.text();
+    let data;
 
-    let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      console.error('Non-JSON response:', raw);
+      throw new Error('Invalid Gemini response');
+    }
+
+    if (!response.ok) {
+      console.error('Gemini error:', data);
+      throw new Error(data?.error?.message || 'Gemini request failed');
+    }
+
+    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) {
+      throw new Error('Empty response from Gemini');
+    }
+
     text = text.replace(/```json|```/g, '').trim();
 
-    const result = JSON.parse(text);
-    return { statusCode: 200, headers, body: JSON.stringify(result) };
+    // SAFE JSON EXTRACTION (prevents random crashes)
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+
+    if (start === -1 || end === -1) {
+      console.error('Invalid AI output:', text);
+      throw new Error('AI did not return valid JSON');
+    }
+
+    const clean = text.slice(start, end + 1);
+
+    let result;
+    try {
+      result = JSON.parse(clean);
+    } catch (err) {
+      console.error('JSON parse failed:', clean);
+      throw new Error('Failed to parse AI response');
+    }
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify(result)
+    };
+
   } catch (err) {
     console.error('interview error:', err);
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
+
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: err.message })
+    };
   }
 };
