@@ -74,6 +74,9 @@ Rules:
 Resume to analyse:
 ${resume.slice(0, 4000)}`;
 
+    console.log('API KEY EXISTS:', !!process.env.GEMINI_API_KEY);
+    console.log('API KEY START:', process.env.GEMINI_API_KEY?.slice(0, 10));
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
