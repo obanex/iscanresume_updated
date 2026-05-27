@@ -915,9 +915,8 @@ async function runA() {
   renderView();
 
   try {
-    S.analysis = await apiFetch('analyze', {
-      resume: S.resume,
-    });
+    const raw = await apiFetch('analyze', { resume: S.resume });
+    S.analysis = typeof raw === "string" ? JSON.parse(raw) : raw;
 
     S.tab = 'feedback';
     toast('Analysis complete!');
