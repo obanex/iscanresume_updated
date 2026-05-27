@@ -1,43 +1,42 @@
 exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method Not Allowed' };
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type' }, body: '' };
   }
+  if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
 
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json',
-  };
+  const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
 
   try {
     const { bullet } = JSON.parse(event.body);
     if (!bullet) return { statusCode: 400, headers, body: JSON.stringify({ error: 'No bullet provided' }) };
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 300,
-        system: `You are an expert resume writer. Rewrite weak resume bullet points into compelling, metrics-driven achievements.
+    const prompt = `You are an expert resume writer. Rewrite this weak resume bullet point into a compelling, metrics-driven achievement.
+
 Rules:
-- Start with a powerful action verb (Built, Engineered, Architected, Optimised, Led, Delivered, Reduced, Increased, Launched, Scaled)
-- Add specific quantitative metrics where logical (%, time saved, users, revenue, team size)
+- Start with a powerful action verb (Built, Engineered, Architected, Optimised, Led, Delivered, Reduced, Increased, Launched, Scaled, Developed)
+- Add specific quantitative metrics where logical (%, time saved, users served, revenue, team size)
 - Keep to 1-2 sentences maximum
 - Sound professional and natural
-- Return ONLY the rewritten bullet — no explanation, no prefix, no bullet symbol`,
-        messages: [{ role: 'user', content: `Rewrite this resume bullet point:\n\n"${bullet}"` }],
-      }),
-    });
+- Return ONLY the rewritten bullet point — no explanation, no prefix, no bullet symbol, no quotes
+
+Bullet to rewrite: ${bullet}`;
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 200 },
+        }),
+      }
+    );
 
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
 
-    const result = data.content.map(b => b.text || '').join('').trim();
+    const result = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
     return { statusCode: 200, headers, body: JSON.stringify({ result }) };
   } catch (err) {
     console.error('rewrite error:', err);
