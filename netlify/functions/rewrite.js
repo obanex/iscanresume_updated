@@ -43,3 +43,4 @@ Bullet to rewrite: ${bullet}`;
     return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) };
   }
 };
+ 
