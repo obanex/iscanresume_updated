@@ -58,14 +58,32 @@ ${resume.slice(0, 4000)}`;
       }
     );
 
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
+
 
     let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    // Strip any markdown code blocks if Gemini adds them
-    text = text.replace(/```json|```/g, '').trim();
 
-    const result = JSON.parse(text);
+    text = text
+      .replace(/```json/g, '')
+      .replace(/```/g, '')
+      .trim();
+    
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    
+    if (start === -1 || end === -1) {
+      throw new Error('Gemini returned invalid JSON');
+    }
+    
+    const cleanJson = text.slice(start, end + 1);
+    
+    let result;
+    
+    try {
+      result = JSON.parse(cleanJson);
+    } catch (parseErr) {
+      console.error('JSON PARSE ERROR:', cleanJson);
+      throw new Error('Failed to parse AI response');
+    }
     return { statusCode: 200, headers, body: JSON.stringify(result) };
   } catch (err) {
     console.error('analyze error:', err);
