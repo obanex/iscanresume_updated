@@ -889,91 +889,180 @@ function qqS(q){const el=document.getElementById('chatIn');if(el){el.value=q;sen
    AI CALLS
 ══════════════════════════════════════════════ */
 /* ── API — calls Netlify Functions which call Gemini server-side ── */
-async function apiFetch(endpoint, body) {
-  const r = await fetch(`/.netlify/functions/${endpoint}`, {
+
+async function apiFetch(type, body) {
+  const r = await fetch(`/.netlify/functions/ai`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      type,
+      ...body,
+    }),
   });
+
   const d = await r.json();
+
   if (d.error) throw new Error(d.error);
-  return d;
+
+  return d.result;
 }
 
-async function runA(){
-  if(!S.resume)return;S.L.a=1;renderView();
-  try{
-    S.analysis = await apiFetch('analyze', { resume: S.resume });
-    S.tab='feedback';
+/* ── ANALYZE ── */
+async function runA() {
+  if (!S.resume) return;
+
+  S.L.a = 1;
+  renderView();
+
+  try {
+    S.analysis = await apiFetch('analyze', {
+      resume: S.resume,
+    });
+
+    S.tab = 'feedback';
     toast('Analysis complete!');
-  }catch(e){
+  } catch (e) {
     console.error('Analysis failed:', e);
     toast('Analysis failed — please try again.', false);
   }
-  S.L.a=0;renderView();
+
+  S.L.a = 0;
+  renderView();
 }
 
-async function doRw(){
-  const v=document.getElementById('rwIn')?.value?.trim();if(!v){toast('Enter a bullet point first',false);return;}
-  S.rwIn=v;S.L.rw=1;renderView();
-  try{
-    const data = await apiFetch('rewrite', { bullet: v });
-    S.rwOut = data.result;
+/* ── REWRITE BULLET ── */
+async function doRw() {
+  const v = document.getElementById('rwIn')?.value?.trim();
+
+  if (!v) {
+    toast('Enter a bullet point first', false);
+    return;
+  }
+
+  S.rwIn = v;
+  S.L.rw = 1;
+  renderView();
+
+  try {
+    const data = await apiFetch('rewrite', {
+      bullet: v,
+    });
+
+    S.rwOut = data;
     toast('Bullet rewritten!');
-  }catch(e){
+  } catch (e) {
     console.error('Rewrite failed:', e);
     toast('Rewrite failed — try again.', false);
   }
-  S.L.rw=0;renderView();
+
+  S.L.rw = 0;
+  renderView();
 }
 
-async function runM(){
-  const jd=document.getElementById('jdb')?.value?.trim();if(!jd){toast('Paste a job description first',false);return;}
-  S.jobDesc=jd;S.L.m=1;renderView();
-  try{
-    S.jobMatch = await apiFetch('match', { resume: S.resume, jobDesc: jd });
+/* ── JOB MATCH ── */
+async function runM() {
+  const jd = document.getElementById('jdb')?.value?.trim();
+
+  if (!jd) {
+    toast('Paste a job description first', false);
+    return;
+  }
+
+  S.jobDesc = jd;
+  S.L.m = 1;
+  renderView();
+
+  try {
+    S.jobMatch = await apiFetch('match', {
+      resume: S.resume,
+      jobDesc: jd,
+    });
+
     toast('Match complete!');
-  }catch(e){
+  } catch (e) {
     console.error('Match failed:', e);
     toast('Match failed — try again.', false);
   }
-  S.L.m=0;renderView();
+
+  S.L.m = 0;
+  renderView();
 }
 
-async function runIV(){
-  const role=document.getElementById('ri')?.value?.trim()||'Software Engineer';
-  const types=[...document.querySelectorAll('.qck:checked')].map(c=>c.value);
-  if(!types.length){toast('Select at least one type',false);return;}
-  S.role=role;S.L.iv=1;renderView();
-  try{
-    S.ivData = await apiFetch('interview', { resume: S.resume, role, types });
-    const n = Object.values(S.ivData.questions||{}).flat().length;
+/* ── INTERVIEW ── */
+async function runIV() {
+  const role =
+    document.getElementById('ri')?.value?.trim() || 'Software Engineer';
+
+  const types = [...document.querySelectorAll('.qck:checked')].map(
+    (c) => c.value
+  );
+
+  if (!types.length) {
+    toast('Select at least one type', false);
+    return;
+  }
+
+  S.role = role;
+  S.L.iv = 1;
+  renderView();
+
+  try {
+    S.ivData = await apiFetch('interview', {
+      resume: S.resume,
+      role,
+      types,
+    });
+
+    const n = Object.values(S.ivData.questions || {}).flat().length;
     toast(`${n} questions generated!`);
-  }catch(e){
+  } catch (e) {
     console.error('Interview gen failed:', e);
     toast('Failed to generate questions — try again.', false);
   }
-  S.L.iv=0;renderView();
+
+  S.L.iv = 0;
+  renderView();
 }
 
-async function sendMsg(){
-  const el=document.getElementById('chatIn');const msg=el?.value?.trim();
-  if(!msg||S.L.c)return;el.value='';S.msgs.push({role:'user',content:msg});S.L.c=1;renderView();scrollChat();
-  try{
+/* ── CHAT ── */
+async function sendMsg() {
+  const el = document.getElementById('chatIn');
+  const msg = el?.value?.trim();
+
+  if (!msg || S.L.c) return;
+
+  el.value = '';
+  S.msgs.push({ role: 'user', content: msg });
+
+  S.L.c = 1;
+  renderView();
+  scrollChat();
+
+  try {
     const data = await apiFetch('chat', {
       messages: S.msgs,
       resume: S.resume || null,
       analysis: S.analysis || null,
     });
-    S.msgs.push({role:'assistant',content:data.result});
-  }catch(e){
+
+    S.msgs.push({
+      role: 'assistant',
+      content: data,
+    });
+  } catch (e) {
     console.error('Chat failed:', e);
-    S.msgs.push({role:'assistant',content:"I'm having trouble connecting right now. Please try again."});
+
+    S.msgs.push({
+      role: 'assistant',
+      content:
+        "I'm having trouble connecting right now. Please try again.",
+    });
   }
-  S.L.c=0;renderView();scrollChat();
+
+  S.L.c = 0;
+  renderView();
+  scrollChat();
 }
-
-
 
 
 /* ══════════════════════════════════════════════
